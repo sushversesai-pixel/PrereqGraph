@@ -12,6 +12,53 @@ const app = express();
 app.use(express.json());
 
 // ============================================================
+// HEALTH CHECK — powers the UI system-status indicator.
+// No Catalyst session required so the dashboard can probe it.
+// ============================================================
+
+app.get("/health", (req, res) => {
+    res.status(200).json({
+        status: "ok",
+        service: "prereq_graph_function",
+        timestamp: new Date().toISOString()
+    });
+});
+
+// ============================================================
+// SESSION-USER RESOLUTION
+// ------------------------------------------------------------
+// When the function is deployed with authentication enabled,
+// Catalyst forwards the signed-in end user. We map that
+// Catalyst user_id directly onto StudentKnowledge.student_id
+// so a student can only ever see their own prerequisite graph.
+//
+// Resolution order:
+//   1. req.user            — populated by Catalyst gateway when
+//                            "Require authentication" is enabled
+//   2. userManagement().getCurrentUser()
+//                          — SDK user-scoped /project-user/current,
+//                            reads the user credential Catalyst
+//                            injected into the request headers
+// ============================================================
+
+async function resolveSessionUser(catalystApp, req) {
+    if (req.user && (req.user.user_id || req.user.id)) {
+        return req.user;
+    }
+
+    try {
+        const user = await catalystApp.userManagement().getCurrentUser();
+        if (user && (user.user_id || user.id)) {
+            return user;
+        }
+    } catch (err) {
+        // No end-user session attached to this request.
+    }
+
+    return null;
+}
+
+// ============================================================
 // MAIN ADVANCED I/O ROUTE
 // ============================================================
 
@@ -28,21 +75,59 @@ app.get("/", async (req, res) => {
         catalystApp = catalyst.initialize(req);
 
         // ========================================================
-        // 2. GET INPUT ARGUMENTS
+        // 2. AUTHENTICATED SESSION -> STUDENT MAPPING
+        // ========================================================
+
+        const sessionUser = await resolveSessionUser(catalystApp, req);
+
+        const requestedStudentId =
+            req.query.student_id || req.body?.student_id;
+
+        const sessionStudentId = sessionUser
+            ? String(sessionUser.user_id || sessionUser.id)
+            : null;
+
+        // A signed-in user may only analyze their own profile.
+        if (
+            sessionStudentId &&
+            requestedStudentId &&
+            String(requestedStudentId) !== sessionStudentId
+        ) {
+            return res.status(403).json({
+                success: false,
+                error:
+                    "Access denied: you can only analyze your own student profile."
+            });
+        }
+
+        // Derive the student identity: authenticated user_id first.
+        let studentId = sessionStudentId;
+
+        // Dev/CLI fallback — only when no authenticated session exists.
+        if (!studentId && requestedStudentId) {
+            studentId = String(requestedStudentId);
+            console.warn(
+                "NO AUTHENTICATED SESSION: using student_id from request " +
+                "(development/testing only)."
+            );
+        }
+
+        // No session and no explicit student -> reject unauthenticated calls.
+        if (!studentId) {
+            return res.status(401).json({
+                success: false,
+                error:
+                    "Authentication required: sign in to analyze your " +
+                    "prerequisite graph."
+            });
+        }
+
+        // ========================================================
+        // 3. GET INPUT ARGUMENTS
         // ========================================================
 
         const conceptId =
-            req.query.concept_id ||
-            req.body?.concept_id;
-
-        const studentId =
-            req.query.student_id ||
-            req.body?.student_id;
-
-        console.log(
-            "RAW QUERY:",
-            JSON.stringify(req.query)
-        );
+            req.query.concept_id || req.body?.concept_id;
 
         console.log(
             "CONCEPT ID:",
@@ -50,12 +135,14 @@ app.get("/", async (req, res) => {
         );
 
         console.log(
-            "STUDENT ID:",
-            studentId
+            "STUDENT ID (resolved):",
+            studentId,
+            "| authenticated:",
+            !!sessionUser
         );
 
         // ========================================================
-        // 3. VALIDATE INPUT
+        // 4. VALIDATE INPUT
         // ========================================================
 
         if (!conceptId) {
@@ -65,15 +152,8 @@ app.get("/", async (req, res) => {
             });
         }
 
-        if (!studentId) {
-            return res.status(400).json({
-                success: false,
-                error: "student_id is required"
-            });
-        }
-
         // ========================================================
-        // 4. ZCQL HELPER
+        // 5. ZCQL HELPER
         // ========================================================
 
         const executeZCQL = async (query) => {
@@ -92,7 +172,7 @@ app.get("/", async (req, res) => {
         };
 
         // ========================================================
-        // 5. GET CONCEPT
+        // 6. GET CONCEPT
         // ========================================================
 
         const getConcept = async (id) => {
@@ -117,7 +197,7 @@ app.get("/", async (req, res) => {
         };
 
         // ========================================================
-        // 6. GET STUDENT KNOWLEDGE
+        // 7. GET STUDENT KNOWLEDGE
         // ========================================================
 
         const getKnowledge = async (
@@ -164,7 +244,7 @@ app.get("/", async (req, res) => {
         };
 
         // ========================================================
-        // 7. CALCULATE KNOWLEDGE GAP
+        // 8. CALCULATE KNOWLEDGE GAP
         // ========================================================
 
         const calculateGap = (
@@ -210,7 +290,7 @@ app.get("/", async (req, res) => {
         };
 
         // ========================================================
-        // 8. TARGET CONCEPT
+        // 9. TARGET CONCEPT
         // ========================================================
 
         const targetConcept =
@@ -274,15 +354,21 @@ app.get("/", async (req, res) => {
         };
 
         // ========================================================
-        // 9. GRAPH STORAGE
+        // 10. GRAPH STORAGE
         // ========================================================
 
         const graphNodes = [];
 
+        // Directed dependency edges: from -> to means
+        // "to is a prerequisite of from". The target concept is
+        // the root; every edge flows from a shallower node to a
+        // deeper prerequisite node.
+        const edges = [];
+
         const visited = new Set();
 
         // ========================================================
-        // 10. RECURSIVELY BUILD PREREQUISITE GRAPH
+        // 11. RECURSIVELY BUILD PREREQUISITE GRAPH
         // ========================================================
 
         const traversePrerequisites = async (
@@ -413,6 +499,11 @@ app.get("/", async (req, res) => {
                     continue;
                 }
 
+                edges.push({
+                    from: currentId,
+                    to: String(prerequisiteId)
+                });
+
                 await traversePrerequisites(
                     prerequisiteId,
                     depth + 1
@@ -421,7 +512,7 @@ app.get("/", async (req, res) => {
         };
 
         // ========================================================
-        // 11. START GRAPH TRAVERSAL
+        // 12. START GRAPH TRAVERSAL
         // ========================================================
 
         await traversePrerequisites(
@@ -430,7 +521,7 @@ app.get("/", async (req, res) => {
         );
 
         // ========================================================
-        // 12. REMOVE TARGET FROM PREREQUISITE COUNT
+        // 13. REMOVE TARGET FROM PREREQUISITE COUNT
         // ========================================================
 
         const prerequisiteNodes =
@@ -441,7 +532,7 @@ app.get("/", async (req, res) => {
             );
 
         // ========================================================
-        // 13. STATISTICS
+        // 14. STATISTICS
         // ========================================================
 
         const identifiedGaps =
@@ -479,140 +570,136 @@ app.get("/", async (req, res) => {
                     );
                 }
             ).length;
-            // ========================================================
-// 14. ROOT-CAUSE DETECTION
-// ========================================================
-
-const gapNodes =
-    prerequisiteNodes.filter(
-        (node) => node.isGap
-    );
-
-// The deepest unresolved prerequisite is treated
-// as the root cause because it represents the most
-// foundational unresolved dependency.
-const rootCause =
-    gapNodes.length > 0
-        ? [...gapNodes].sort((a, b) => {
-
-            if (b.depth !== a.depth) {
-                return b.depth - a.depth;
-            }
-
-            return (
-                a.confidence -
-                b.confidence
-            );
-
-        })[0]
-        : null;
-
-
-// ========================================================
-// 15. KNOWLEDGE DEBT ENGINE
-// ========================================================
-
-// Knowledge debt increases when:
-// - confidence is low
-// - concept difficulty is high
-// - multiple prerequisite gaps exist
-
-let debtScore = 0;
-
-for (
-    const node of prerequisiteNodes
-) {
-
-    const confidence =
-        Math.min(
-            Math.max(
-                Number(
-                    node.confidence || 0
-                ),
-                0
-            ),
-            1
-        );
-
-    const difficulty =
-        Math.min(
-            Math.max(
-                Number(
-                    node.difficulty || 1
-                ),
-                1
-            ),
-            5
-        );
-
-    const confidenceDeficit =
-        1 - confidence;
-
-    const difficultyWeight =
-        0.5 +
-        (difficulty / 5);
-
-    debtScore +=
-        confidenceDeficit *
-        difficultyWeight;
-}
-
-
-// Normalize to 0–100
-const knowledgeDebt =
-    Math.min(
-        100,
-        Math.round(
-            (
-                debtScore /
-                Math.max(
-                    prerequisiteNodes.length,
-                    1
-                )
-            ) * 100
-        )
-    );
-
-
-// Critical gaps have confidence below 40%
-const criticalGaps =
-    prerequisiteNodes.filter(
-        (node) =>
-            node.isGap &&
-            Number(
-                node.confidence || 0
-            ) < 0.4
-    );
-
-
-// Estimate downstream impact.
-// Since depth 0 is the target and larger depth
-// represents foundational prerequisites, every
-// shallower node is downstream of the root gap.
-let rootCauseImpact = 0;
-
-if (rootCause) {
-
-    rootCauseImpact =
-        prerequisiteNodes.filter(
-            (node) =>
-                node.depth <
-                rootCause.depth
-        ).length + 1;
-}
-
-
-// Debt classification
-let debtLevel = "LOW";
-
-if (knowledgeDebt >= 70) {
-    debtLevel = "HIGH";
-} else if (knowledgeDebt >= 40) {
-    debtLevel = "MODERATE";
-}
 
         // ========================================================
-        // 14. BUILD REVISION PATH
+        // 15. ROOT-CAUSE DETECTION
+        // ========================================================
+
+        const gapNodes =
+            prerequisiteNodes.filter(
+                (node) => node.isGap
+            );
+
+        // The deepest unresolved prerequisite is treated
+        // as the root cause because it represents the most
+        // foundational unresolved dependency.
+        const rootCause =
+            gapNodes.length > 0
+                ? [...gapNodes].sort((a, b) => {
+
+                    if (b.depth !== a.depth) {
+                        return b.depth - a.depth;
+                    }
+
+                    return (
+                        a.confidence -
+                        b.confidence
+                    );
+
+                })[0]
+                : null;
+
+        // ========================================================
+        // 16. KNOWLEDGE DEBT ENGINE
+        // ========================================================
+
+        // Knowledge debt increases when:
+        // - confidence is low
+        // - concept difficulty is high
+        // - multiple prerequisite gaps exist
+
+        let debtScore = 0;
+
+        for (
+            const node of prerequisiteNodes
+        ) {
+
+            const confidence =
+                Math.min(
+                    Math.max(
+                        Number(
+                            node.confidence || 0
+                        ),
+                        0
+                    ),
+                    1
+                );
+
+            const difficulty =
+                Math.min(
+                    Math.max(
+                        Number(
+                            node.difficulty || 1
+                        ),
+                        1
+                    ),
+                    5
+                );
+
+            const confidenceDeficit =
+                1 - confidence;
+
+            const difficultyWeight =
+                0.5 +
+                (difficulty / 5);
+
+            debtScore +=
+                confidenceDeficit *
+                difficultyWeight;
+        }
+
+        // Normalize to 0–100
+        const knowledgeDebt =
+            Math.min(
+                100,
+                Math.round(
+                    (
+                        debtScore /
+                        Math.max(
+                            prerequisiteNodes.length,
+                            1
+                        )
+                    ) * 100
+                )
+            );
+
+        // Critical gaps have confidence below 40%
+        const criticalGaps =
+            prerequisiteNodes.filter(
+                (node) =>
+                    node.isGap &&
+                    Number(
+                        node.confidence || 0
+                    ) < 0.4
+            );
+
+        // Estimate downstream impact.
+        // Since depth 0 is the target and larger depth
+        // represents foundational prerequisites, every
+        // shallower node is downstream of the root gap.
+        let rootCauseImpact = 0;
+
+        if (rootCause) {
+
+            rootCauseImpact =
+                prerequisiteNodes.filter(
+                    (node) =>
+                        node.depth <
+                        rootCause.depth
+                ).length + 1;
+        }
+
+        // Debt classification
+        let debtLevel = "LOW";
+
+        if (knowledgeDebt >= 70) {
+            debtLevel = "HIGH";
+        } else if (knowledgeDebt >= 40) {
+            debtLevel = "MODERATE";
+        }
+
+        // ========================================================
+        // 17. BUILD REVISION PATH
         // ========================================================
 
         const revisionPath =
@@ -652,104 +739,111 @@ if (knowledgeDebt >= 70) {
                 );
 
         // ========================================================
-        // 15. FINAL RESPONSE
+        // 18. FINAL RESPONSE
         // ========================================================
 
         const response = {
 
-    success: true,
+            success: true,
 
-    target:
-        target,
+            student: {
+                id: studentId,
+                authenticated: !!sessionUser
+            },
 
-    graph: {
+            target:
+                target,
 
-        nodes:
-            graphNodes
-    },
+            graph: {
+                nodes:
+                    graphNodes,
+                edges:
+                    edges
+            },
 
-    root_cause:
-        rootCause
-            ? {
-                concept_id:
-                    rootCause.id,
+            root_cause:
+                rootCause
+                    ? {
+                        concept_id:
+                            rootCause.id,
 
-                concept_name:
-                    rootCause.name,
+                        concept_name:
+                            rootCause.name,
 
-                description:
-                    rootCause.description,
+                        description:
+                            rootCause.description,
 
-                confidence:
-                    rootCause.confidence,
+                        confidence:
+                            rootCause.confidence,
 
-                status:
-                    rootCause.status,
+                        status:
+                            rootCause.status,
 
-                depth:
-                    rootCause.depth,
+                        depth:
+                            rootCause.depth,
 
-                downstream_impact:
+                        downstream_impact:
+                            rootCauseImpact
+                    }
+                    : null,
+
+            knowledge_debt: {
+
+                score:
+                    knowledgeDebt,
+
+                level:
+                    debtLevel,
+
+                total_gaps:
+                    identifiedGaps,
+
+                critical_gaps:
+                    criticalGaps.length,
+
+                affected_concepts:
                     rootCauseImpact
+            },
+
+            statistics: {
+                total_prerequisites:
+                    prerequisiteNodes.length,
+
+                identified_gaps:
+                    identifiedGaps,
+
+                strong_concepts:
+                    strongConcepts,
+
+                weak_concepts:
+                    weakConcepts
             }
-            : null,
+        };
 
-    knowledge_debt: {
+        // ========================================================
+        // 19. DEBUG LOG
+        // ========================================================
 
-        score:
-            knowledgeDebt,
+        console.log(
+            "FINAL RESPONSE:"
+        );
 
-        level:
-            debtLevel,
+        console.log(
+            JSON.stringify(
+                response,
+                null,
+                2
+            )
+        );
 
-        total_gaps:
-            identifiedGaps,
+        // ========================================================
+        // 20. SEND COMPLETE JSON RESPONSE
+        // ========================================================
 
-        critical_gaps:
-            criticalGaps.length,
+        return res
+            .status(200)
+            .json(response);
 
-        affected_concepts:
-            rootCauseImpact
-    },
-
-   statistics: {
-    total_prerequisites:
-        prerequisiteNodes.length,
-
-    identified_gaps:
-        identifiedGaps,
-
-    strong_concepts:
-        strongConcepts,
-
-    weak_concepts:
-        weakConcepts
-}
-};
-
-// ========================================================
-// 16. DEBUG LOG
-// ========================================================
-
-console.log(
-    "FINAL RESPONSE:"
-);
-
-console.log(
-    JSON.stringify(
-        response,
-        null,
-        2
-    )
-);
-
-// ========================================================
-// 17. SEND COMPLETE JSON RESPONSE
-// ========================================================
-
-return res
-    .status(200)
-    .json(response);
     } catch (error) {
 
         // ========================================================
