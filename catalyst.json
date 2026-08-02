@@ -1,0 +1,19 @@
+{
+  "functions": {
+    "targets": [
+      "prereq_graph_function"
+    ],
+    "ignore": [],
+    "source": "functions"
+  },
+  "client": {
+    "source": "prereqgraph",
+    "plugin": "zcatalyst-cli-plugin-react"
+  },
+  "slate": [
+    {
+      "name": "prereqgraph",
+      "source": "C:\\Users\\bsais\\OneDrive\\Desktop\\PrereqGraph\\prereqgraph"
+    }
+  ]
+}

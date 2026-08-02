@@ -1,0 +1,10 @@
+{
+    "name": "prereq_graph_function",
+    "version": "1.0.0",
+    "main": "index.js",
+    "author": "",
+    "dependencies": {
+        "express": "^4.21.2",
+        "zcatalyst-sdk-node": "latest"
+    }
+}

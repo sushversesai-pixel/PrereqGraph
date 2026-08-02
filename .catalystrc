@@ -1,0 +1,30 @@
+{
+  "defaults": {
+    "project": 1,
+    "env": 1
+  },
+  "actives": {
+    "project": 1,
+    "env": 1
+  },
+  "projects": [
+    {
+      "idx": 1,
+      "id": "58146000000018001",
+      "name": "PrereqGraph",
+      "domain": {
+        "id": "50044563597",
+        "name": "prereqgraph-60081056805.development"
+      },
+      "timezone": "Asia/Kolkata",
+      "env": [
+        {
+          "idx": 1,
+          "id": "60081056805",
+          "name": "Development",
+          "type": 3
+        }
+      ]
+    }
+  ]
+}
