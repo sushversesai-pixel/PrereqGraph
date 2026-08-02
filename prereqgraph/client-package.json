@@ -1,0 +1,6 @@
+{
+  "name": "prereqgraph",
+  "version": "0.1.0",
+  "homepage": "/__catalyst/auth/login",
+  "login_redirect": "index.html"
+}
