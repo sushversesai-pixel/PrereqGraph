@@ -1,70 +1,150 @@
-# Getting Started with Create React App
+# PrereqGraph
 
-This project was bootstrapped with [Create React App](https://github.com/facebook/create-react-app).
+**Learning intelligence** — a Zoho Catalyst app that traces prerequisite dependency graphs to answer the two
+questions that matter in education:
 
-## Available Scripts
+- **For students:** *"Am I ready to learn this concept, and what exactly is blocking me?"*
+- **For faculty:** *"Is my class ready for this topic, and which foundational gap is blocking the most students?"*
 
-In the project directory, you can run:
+Built with a **Create React App** frontend (`prereqgraph/`) and a **Zoho Catalyst Advanced I/O** backend
+(`functions/prereq_graph_function/`, Express + Node SDK).
 
-### `yarn start`
+---
 
-Runs the app in the development mode.\
-Open [http://localhost:3000](http://localhost:3000) to view it in the browser.
+## Two experiences, one app
 
-The page will reload if you make edits.\
-You will also see any lint errors in the console.
+| | Student Workspace | Faculty Dashboard |
+|---|---|---|
+| Question | Am I ready? | Is my class ready? |
+| Scope | One learner's prerequisite graph | The whole cohort aggregated |
+| Modules | Analysis, Learning Paths, Knowledge Map, Insights, Progress, Recommendations | Class Overview, Bottleneck, Student Roster, Class Map, Actions |
+| Data | `StudentKnowledge` rows for your user | Every student's `StudentKnowledge` rows |
 
-### `yarn test`
+The experience is driven by the **logged-in user's Catalyst role** (User Management → Roles) — **no profile
+table needed**. Users holding a Faculty/Teacher/Instructor/Professor/Admin role get the Faculty Dashboard;
+everyone else gets the Student Workspace.
 
-Launches the test runner in the interactive watch mode.\
-See the section about [running tests](https://facebook.github.io/create-react-app/docs/running-tests) for more information.
+### Demo mode
 
-### `yarn build`
+When the app runs somewhere Catalyst doesn't serve (local previews, sandboxes), it auto-falls back to **demo
+mode**: a synthetic 24-student class for the faculty view and a demo learner for the student view. In demo mode
+you can switch roles from the profile panel (click your avatar) or the "Try faculty dashboard" button in the demo
+banner. Demo mode never touches Catalyst, so no 404s and no credentials needed.
 
-Builds the app for production to the `build` folder.\
-It correctly bundles React in production mode and optimizes the build for the best performance.
+---
 
-The build is minified and the filenames include the hashes.\
-Your app is ready to be deployed!
+## 👤 Roles & identity (pure Catalyst auth — no extra table)
 
-See the section about [deployment](https://facebook.github.io/create-react-app/docs/deployment) for more information.
+Identity comes entirely from **Catalyst User Management** — the app does **not** use a `Profiles` Data Store
+table:
 
-### `yarn eject`
+- **Who you are** — `user_id`, `first_name`, `last_name`, `email` come from the authenticated session
+  (`userManagement().getCurrentUser()`).
+- **Your role** — derived from the user's Catalyst roles (`role_details.role_name`). Any role matching
+  `faculty`, `teacher`, `instructor`, `professor`, or `admin` → **faculty**; otherwise → **student**.
+- **Roster names** — the faculty dashboard resolves student names via the admin-scoped
+  `userManagement().getAllUsers()` API. If the function lacks admin credentials, names fall back to
+  `Student <id>`.
 
-**Note: this is a one-way operation. Once you `eject`, you can’t go back!**
+### Make yourself faculty (Console)
 
-If you aren’t satisfied with the build tool and configuration choices, you can `eject` at any time. This command will remove the single build dependency from your project.
+1. **Catalyst Console → your project → User Management → Roles → + Create Role**.
+2. Name it e.g. **`Faculty`** (any name containing "faculty", "teacher", "instructor", "professor", or "admin"
+   works).
+3. **Add yourself** (and any instructors) to that role.
+4. Redeploy (`catalyst deploy`) and sign in — the app auto-detects your role and shows the Faculty Dashboard.
 
-Instead, it will copy all the configuration files and the transitive dependencies (webpack, Babel, ESLint, etc) right into your project so you have full control over them. All of the commands except `eject` will still work, but they will point to the copied scripts so you can tweak them. At this point you’re on your own.
+> **Function credentials note:** `getAllUsers()` is admin-scoped. Advanced I/O functions run with the project's
+> service credentials, so this typically works out of the box. If roster names show as "Student \<id\>", check the
+> function's execution credentials in the console.
 
-You don’t have to ever use `eject`. The curated feature set is suitable for small and middle deployments, and you shouldn’t feel obligated to use this feature. However we understand that this tool wouldn’t be useful if you couldn’t customize it when you are ready for it.
+---
 
-## Learn More
+## 🗄 Catalyst Data Store setup
 
-You can learn more in the [Create React App documentation](https://facebook.github.io/create-react-app/docs/getting-started).
+Create these tables in **Catalyst Console → Data Store** (all pre-existing — **nothing new to create**):
 
-To learn React, check out the [React documentation](https://reactjs.org/).
+### `Concepts`
+| Column | Type | Notes |
+|---|---|---|
+| `name` | Text | Concept title |
+| `description` | Text | Short summary |
+| `difficulty` | Number | 1–5 |
 
-### Code Splitting
+`ROWID` is auto-generated and **is** your `concept_id`.
 
-This section has moved here: [https://facebook.github.io/create-react-app/docs/code-splitting](https://facebook.github.io/create-react-app/docs/code-splitting)
+### `Prerequisites`
+| Column | Type | Notes |
+|---|---|---|
+| `concept_id` | Number | The dependent concept's ROWID |
+| `prerequisite_id` | Number | The required prerequisite's ROWID |
 
-### Analyzing the Bundle Size
+One row per edge: "concept X requires Y".
 
-This section has moved here: [https://facebook.github.io/create-react-app/docs/analyzing-the-bundle-size](https://facebook.github.io/create-react-app/docs/analyzing-the-bundle-size)
+### `StudentKnowledge`
+| Column | Type | Notes |
+|---|---|---|
+| `student_id` | Text | **The Catalyst `user_id` of the student** |
+| `concept_id` | Number | The concept's ROWID |
+| `status` | Text | `Strong` / `Weak` / `Don't Know` |
+| `confidence` | Number | 0.0 – 1.0 |
 
-### Making a Progressive Web App
+> ⚠️ **Student identity:** `student_id` must equal the student's Catalyst `user_id` (an 18-digit number) — create
+> the column as **Text** to avoid precision loss.
 
-This section has moved here: [https://facebook.github.io/create-react-app/docs/making-a-progressive-web-app](https://facebook.github.io/create-react-app/docs/making-a-progressive-web-app)
+---
 
-### Advanced Configuration
+## 🔌 Backend endpoints
 
-This section has moved here: [https://facebook.github.io/create-react-app/docs/advanced-configuration](https://facebook.github.io/create-react-app/docs/advanced-configuration)
+All routes live under `/server/prereq_graph_function/` (Catalyst prefixes `/server/<function_name>`):
 
-### Deployment
+| Endpoint | Auth | Purpose |
+|---|---|---|
+| `GET /` | Session (or `student_id` in dev) | Single-student prerequisite analysis: graph, gaps, root cause, knowledge debt, revision path |
+| `GET /health` | None | System status for the top-bar indicator |
+| `GET /profile` | Session | Current user's identity + role (from Catalyst session, no table) |
+| `GET /faculty/cohort?concept_id=X` | Session + **Catalyst role = faculty** | Class readiness %, cohort debt, mastery histogram, bottleneck, impact ranking, 2×2 risk matrix, roster with misconception/imposter flags, class concept map, remediation groups, pacing advice, pre-lecture quiz |
 
-This section has moved here: [https://facebook.github.io/create-react-app/docs/deployment](https://facebook.github.io/create-react-app/docs/deployment)
+---
 
-### `yarn build` fails to minify
+## 🚀 Local development & deploy
 
-This section has moved here: [https://facebook.github.io/create-react-app/docs/troubleshooting#npm-run-build-fails-to-minify](https://facebook.github.io/create-react-app/docs/troubleshooting#npm-run-build-fails-to-minify)
+1. **Install & login**
+   ```bash
+   npm install -g catalyst-cli
+   catalyst login
+   ```
+2. **Install deps**
+   ```bash
+   cd prereqgraph && npm install
+   cd ../functions/prereq_graph_function && npm install
+   ```
+3. **Run locally** (serves the client on port 3000 + functions + `/__catalyst/*` auth routes)
+   ```bash
+   catalyst serve
+   ```
+   > **Windows / OneDrive:** if `catalyst serve` fails with *"unable to cleanup the .build directory"*, a stale
+   > Node process or OneDrive sync is locking `.build`. Close running servers, `taskkill /F /IM node.exe`,
+   > `Remove-Item -Recurse -Force .build`, and retry. For good, move the repo outside OneDrive.
+4. **Deploy**
+   ```bash
+   catalyst deploy
+   ```
+   Your app runs on `https://<domain>.development.catalystserverless.com` — log in via
+   `/__catalyst/auth/login`, then the top-bar status turns green and analysis runs against your real Data Store.
+
+### Faculty quick-start checklist
+1. Confirm the three tables exist (Concepts, Prerequisites, StudentKnowledge).
+2. Create a **Faculty** role in Catalyst User Management and assign yourself to it.
+3. Give a few students `StudentKnowledge` rows (their `user_id` as `student_id`).
+4. Deploy, sign in as faculty, and open the **Faculty Dashboard** → enter a concept ID → *Analyze Class*.
+
+---
+
+## Available scripts (in `prereqgraph/`)
+
+```bash
+npm start        # runs the app (react-scripts start)
+npm test         # runs the smoke test
+npm run build    # production build into build/
+```
