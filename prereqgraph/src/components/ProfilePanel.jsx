@@ -6,7 +6,7 @@
 
 import { useEffect } from "react";
 
-export default function ProfilePanel({ profile, demoMode, onClose, onSwitchRole }) {
+export default function ProfilePanel({ profile, demoMode, onClose, onSwitchRole, onLogout }) {
     useEffect(() => {
         const onKey = (e) => {
             if (e.key === "Escape") onClose();
@@ -102,6 +102,14 @@ export default function ProfilePanel({ profile, demoMode, onClose, onSwitchRole 
                         Your role is derived from your <b>Catalyst user role</b> in User Management (Faculty,
                         Teacher, Instructor, Professor, or Admin ⇒ faculty view; otherwise student).
                     </p>
+                )}
+
+                {!demoMode && onLogout && (
+                    <div className="profile-logout-row">
+                        <button type="button" className="profile-logout" onClick={onLogout}>
+                            ↪ Sign out
+                        </button>
+                    </div>
                 )}
             </div>
         </div>

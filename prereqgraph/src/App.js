@@ -44,6 +44,7 @@ function isCatalystHost() {
         host === "localhost" ||
         host === "127.0.0.1" ||
         host.endsWith("catalystserverless.com") ||
+        host.endsWith("onslate.in") ||
         host.endsWith("zohosites.com") ||
         host.endsWith("zohosites.in") ||
         process.env.REACT_APP_CATALYST === "1" ||
@@ -596,6 +597,21 @@ export default function App() {
                         </div>
                     )}
 
+                    {!demoMode && statusState === "down" && (
+                        <div className="backend-warning">
+                            <span className="backend-warning-icon">⚠</span>
+                            <div>
+                                <strong>Backend function unreachable</strong>
+                                <p>
+                                    PrereqGraph's API at <code>/server/prereq_graph_function/</code> isn't
+                                    responding — analysis, profiles and the faculty dashboard won't work until
+                                    the function is deployed. Run <code>catalyst deploy</code> from the repo
+                                    root (deploys client + function together), then reload.
+                                </p>
+                            </div>
+                        </div>
+                    )}
+
                     <section className="page-intro">
                         <div>
                             <div className="page-kicker">{section.kicker}</div>
@@ -792,6 +808,7 @@ export default function App() {
                     demoMode={demoMode}
                     onClose={() => setProfileOpen(false)}
                     onSwitchRole={switchRole}
+                    onLogout={logout}
                 />
             )}
         </div>
